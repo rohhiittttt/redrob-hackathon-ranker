@@ -1644,7 +1644,8 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         with open(FINAL_CSV, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             reread_rows = list(reader)
-        assert len(reread_rows) == 100, f'Re-read row count mismatch: {len(reread_rows)}'
+        assert len(reread_rows) == effective_top_n, \
+            f'Re-read row count mismatch: {len(reread_rows)} (expected {effective_top_n})'
         assert list(reread_rows[0].keys()) == ['candidate_id', 'rank', 'score', 'reasoning'], \
             f'Column order mismatch: {list(reread_rows[0].keys())}'
         print('  ✓ File re-reads cleanly with correct columns and row count.')
