@@ -53,7 +53,6 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     """
     PRECOMPUTED = precomputed_dir
     OUTPUT_DIR  = str(Path(output_csv_path).parent)
-    import os
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # ── Single install for all phases ──────────────────────────────────────────
@@ -72,7 +71,6 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     import pickle
     from datetime import datetime
     from dataclasses import dataclass, field
-    from pathlib import Path
     from rank_bm25 import BM25Okapi
     import rank_bm25
 
