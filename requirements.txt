@@ -1,0 +1,4 @@
+gradio>=4.0
+numpy
+rank_bm25
+sentence-transformers
