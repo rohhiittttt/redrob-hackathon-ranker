@@ -112,8 +112,21 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
     # 0.4 — Feature cache
     with open(f'{PRECOMPUTED}/feature_cache.json') as f:
-        feature_cache = json.load(f)
-    print(f'  Loaded feature cache        : {len(feature_cache)} candidates')
+        feature_cache_full = json.load(f)
+    print(f'  Loaded feature cache (full) : {len(feature_cache_full)} candidates')
+
+    # Scope the precomputed feature cache down to only the candidates present
+    # in this run's uploaded sample. Without this, downstream loops iterate
+    # over the full precomputed pool (e.g. 100k) and crash with KeyError on
+    # candidates_dict, which only contains the uploaded subset.
+    sample_cids = {c['candidate_id'] for c in candidates}
+    feature_cache = {cid: v for cid, v in feature_cache_full.items() if cid in sample_cids}
+    missing_from_cache = sample_cids - feature_cache.keys()
+    if missing_from_cache:
+        print(f'  WARNING: {len(missing_from_cache)} uploaded candidate_id(s) '
+              f'not found in precomputed feature_cache — they will be skipped: '
+              f'{sorted(missing_from_cache)[:5]}{"..." if len(missing_from_cache) > 5 else ""}')
+    print(f'  Feature cache scoped to sample : {len(feature_cache)} candidates')
 
     # 0.4b — Cross encoder blended cache (replaces live CrossEncoder model)
     with open(f'{PRECOMPUTED}/cross_scores_blended_top200.json') as f:
