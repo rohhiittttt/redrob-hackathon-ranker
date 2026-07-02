@@ -52,23 +52,24 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         'honeypot_rate', 'csv_path'.
     """
     PRECOMPUTED = precomputed_dir
-    OUTPUT_DIR  = str(Path(output_csv_path).parent)
+    OUTPUT_DIR = str(Path(output_csv_path).parent)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # ── Single install for all phases ──────────────────────────────────────────
+    # ── Single install for all phases ──────────────────────────────────────
     # sentence-transformers is no longer needed — Phase B removed the live
     # CrossEncoder in favor of precomputed cached scores (cross_score_cache).
     # rank_bm25 is still required (BM25Okapi is used directly + needed to
     # unpickle bm25_index.pkl), but this environment may have no internet
     # access (e.g. Stage 3 offline grading), so only install if it's missing.
 
-    # ── All imports (single block) ─────────────────────────────────────────────
+    # ── All imports (single block) ───────────────────────────────────────────
     import csv
     import heapq
     import json
     import re
     import numpy as np
     import pickle
+    import random
     from datetime import datetime
     from dataclasses import dataclass, field
     from rank_bm25 import BM25Okapi
@@ -76,12 +77,12 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
     TODAY = datetime(2026, 6, 28)
 
-    # ── Candidates are passed in directly (already parsed dicts) ───────────────
+    # ── Candidates are passed in directly (already parsed dicts) ─────────────
     print(f'Loaded {len(candidates)} candidates')
 
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     # PHASE 0 — Load + Build
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
 
     print('[Phase 0] Loading precomputed artifacts...')
 
@@ -105,9 +106,9 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
     # 0.3 — BM25 index
     with open(f'{PRECOMPUTED}/bm25_index.pkl', 'rb') as f:
-        bm25_data  = pickle.load(f)
+        bm25_data = pickle.load(f)
         bm25_index = bm25_data['index']
-        bm25_cids  = bm25_data['cids']
+        bm25_cids = bm25_data['cids']
     print(f'  Loaded BM25 index           : {len(bm25_cids)} candidates')
 
     # 0.4 — Feature cache
@@ -135,12 +136,12 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
     # 0.5 — Index maps
     embed_index_map = {cid: idx for idx, cid in enumerate(embed_cids)}
-    bm25_index_map  = {cid: idx for idx, cid in enumerate(bm25_cids)}
+    bm25_index_map = {cid: idx for idx, cid in enumerate(bm25_cids)}
     print(f'  Built index maps            : ready')
 
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     # 0.6 — AI Taxonomy
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
 
     print('[Phase 0] Building AI taxonomy...')
 
@@ -194,10 +195,10 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     }
 
     def compute_taxonomy_hits(cid):
-        f    = feature_cache[cid]
+        f = feature_cache[cid]
         text = (
             f['headline'] + ' ' +
-            f['summary']  + ' ' +
+            f['summary'] + ' ' +
             ' '.join(f['skill_names']) + ' ' +
             f['all_desc']
         ).lower()
@@ -209,49 +210,76 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     taxonomy_cache = {cid: compute_taxonomy_hits(cid) for cid in feature_cache}
     print(f'  Taxonomy cache built        : {len(taxonomy_cache)} candidates')
 
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
     # 0.7 — Behavioral Multipliers
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════
 
     print('[Phase 0] Computing behavioral multipliers...')
 
     def compute_behavioral_multiplier(cid):
-        f     = feature_cache[cid]
+        f = feature_cache[cid]
         score = 1.0
 
-        if f['otw']:                              score *= 1.10
-        if   f['inactive_days'] <= 7:             score *= 1.10
-        elif f['inactive_days'] <= 30:            score *= 1.00
-        elif f['inactive_days'] <= 90:            score *= 0.85
-        else:                                     score *= 0.60
+        if f['otw']:
+            score *= 1.10
+        if f['inactive_days'] <= 7:
+            score *= 1.10
+        elif f['inactive_days'] <= 30:
+            score *= 1.00
+        elif f['inactive_days'] <= 90:
+            score *= 0.85
+        else:
+            score *= 0.60
 
         rr = f['resp_rate']
-        if   rr >= 0.8:                           score *= 1.08
-        elif rr >= 0.6:                           score *= 1.00
-        elif rr >= 0.4:                           score *= 0.80
-        elif rr >= 0.2:                           score *= 0.60
-        else:                                     score *= 0.40
-        nd = f['notice_days']
-        if   nd <= 15:                            score *= 1.05
-        elif nd <= 30:                            score *= 1.00
-        elif nd <= 45:                            score *= 0.95
-        elif nd <= 60:                            score *= 0.85
-        elif nd <= 90:                            score *= 0.70
-        else:                                     score *= 0.50
+        if rr >= 0.8:
+            score *= 1.08
+        elif rr >= 0.6:
+            score *= 1.00
+        elif rr >= 0.4:
+            score *= 0.80
+        elif rr >= 0.2:
+            score *= 0.60
+        else:
+            score *= 0.40
 
-        if   f['github_score'] >= 60:             score *= 1.05
-        elif f['github_score'] == -1:             score *= 0.98
+        nd = f['notice_days']
+        if nd <= 15:
+            score *= 1.05
+        elif nd <= 30:
+            score *= 1.00
+        elif nd <= 45:
+            score *= 0.95
+        elif nd <= 60:
+            score *= 0.85
+        elif nd <= 90:
+            score *= 0.70
+        else:
+            score *= 0.50
+
+        if f['github_score'] >= 60:
+            score *= 1.05
+        elif f['github_score'] == -1:
+            score *= 0.98
 
         ir = f['interview_rate']
-        if   ir >= 0.9:                           score *= 1.04
-        elif ir >= 0.7:                           score *= 1.00
-        elif ir >= 0.5:                           score *= 0.80
-        elif ir >= 0.4:                           score *= 0.70
-        else :                                    score *= 0.50
+        if ir >= 0.9:
+            score *= 1.04
+        elif ir >= 0.7:
+            score *= 1.00
+        elif ir >= 0.5:
+            score *= 0.80
+        elif ir >= 0.4:
+            score *= 0.70
+        else:
+            score *= 0.50
 
-        if   f['location_tier'] == 'preferred':   score *= 1.08
-        elif f['location_tier'] == 'tier_1':      score *= 1.03
-        elif f['willing_relocate']:               score *= 1.01
+        if f['location_tier'] == 'preferred':
+            score *= 1.08
+        elif f['location_tier'] == 'tier_1':
+            score *= 1.03
+        elif f['willing_relocate']:
+            score *= 1.01
 
         return round(min(score, 1.5), 4)
 
@@ -317,6 +345,65 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
     candidates_dict = {c['candidate_id']: c for c in candidates}
 
+    CONSULTING_COMPANIES = [
+        # Indian IT services / staffing majors
+        'tcs', 'tata consultancy', 'infosys', 'wipro', 'accenture',
+        'cognizant', 'capgemini', 'hcl', 'hcltech', 'tech mahindra',
+        'mphasis', 'l&t infotech', 'ltimindtree', 'mindtree', 'birlasoft',
+        'persistent systems', 'hexaware', 'zensar', 'sonata software',
+        'happiest minds', 'cyient', 'niit technologies', 'coforge',
+        'firstsource', 'wns global', 'genpact', 'ibm india', 'dxc technology',
+        'atos', 'unisys', 'ust global', 'virtusa', 'syntel', 'mastech',
+        'aptech', 'quess corp', 'randstad', 'teamlease',
+        # Global consulting / staffing
+        'deloitte', 'pwc', 'pricewaterhousecoopers', 'ey', 'ernst & young',
+        'kpmg', 'mckinsey', 'bcg', 'boston consulting', 'bain & company',
+        'infogain', 'globallogic', 'endava', 'epam', 'thoughtworks',
+        'luxoft', 'grid dynamics', 'itc infotech', 'valuelabs',
+        'brillio', 'kellton', 'saggezza', 'kforce', 'robert half',
+        'collabera', 'apex systems', 'insight global', 'ust',
+    ]
+
+    def normalize_company(name):
+        return re.sub(r'[^a-z0-9& ]', '', (name or '').lower()).strip()
+
+    def is_consulting_company(company_name):
+        norm = normalize_company(company_name)
+        return any(term in norm for term in CONSULTING_COMPANIES)
+
+    def compute_is_consulting_only_live(cid):
+        """
+        Flags a candidate as consulting/service-based ONLY if EVERY single
+        role in their entire career_history was at a consulting/service
+        company. If even one role was at a non-consulting company, the
+        candidate is NOT flagged.
+        """
+        cand = candidates_dict.get(cid)
+        if not cand:
+            return False
+        career = cand.get('career_history', []) or []
+        if not career:
+            return False
+        return all(is_consulting_company(role.get('company', '')) for role in career)
+
+    print('[Patch] Computing live consulting-company flags...')
+    consulting_flag_live = {
+        cid: compute_is_consulting_only_live(cid) for cid in feature_cache
+    }
+    flagged_count = sum(consulting_flag_live.values())
+    stale_flagged_count = sum(
+        1 for cid in feature_cache if feature_cache[cid].get('is_consulting_only')
+    )
+    print(f'  Stale cached flag caught : {stale_flagged_count} candidates')
+    print(f'  Live recomputed flag caught: {flagged_count} candidates')
+    newly_caught = [
+        cid for cid in feature_cache
+        if consulting_flag_live[cid] and not feature_cache[cid].get('is_consulting_only')
+    ]
+    print(f'  Newly caught by live check (missed by stale cache): {len(newly_caught)}')
+    if newly_caught[:10]:
+        print(f'  Sample newly-caught candidate_ids: {newly_caught[:10]}')
+
     def is_title_chaser(cid):
         cand = candidates_dict[cid]
         career = sorted(
@@ -326,12 +413,12 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         if len(career) < 2:
             return False
 
-        short_stints  = 0
+        short_stints = 0
         total_company_switches = 0
 
         for i in range(len(career) - 1):
             cur_role, next_role = career[i], career[i + 1]
-            cur_company  = (cur_role.get('company', '') or '').strip().lower()
+            cur_company = (cur_role.get('company', '') or '').strip().lower()
             next_company = (next_role.get('company', '') or '').strip().lower()
             if not cur_company or not next_company or cur_company == next_company:
                 continue  # skip internal promotions, only count actual company switches
@@ -345,6 +432,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             return False
 
         return (short_stints / total_company_switches) >= 0.5
+
     def get_last_n_roles(cid, n=3):
         cand = candidates_dict[cid]
         career = cand.get('career_history', [])
@@ -358,7 +446,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         return sum(tenures) / len(tenures) if tenures else 999
 
     def get_roles_last_18_months(cid):
-        cand   = candidates_dict[cid]
+        cand = candidates_dict[cid]
         career = cand.get('career_history', [])
         cutoff = datetime(2024, 12, 28)
         recent = []
@@ -370,7 +458,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
                     end = datetime.strptime(role['end_date'], '%Y-%m-%d')
                     if end >= cutoff:
                         recent.append(role)
-            except:
+            except Exception:
                 pass
         return recent
 
@@ -382,15 +470,16 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         return any(signal in combined for signal in CODING_SIGNALS)
 
     def count_terms_in_profile(cid, terms):
-        f    = feature_cache[cid]
+        f = feature_cache[cid]
         text = (
             f['headline'] + ' ' +
-            f['summary']  + ' ' +
+            f['summary'] + ' ' +
             ' '.join(f['skill_names']) + ' ' +
             f['all_desc']
         ).lower()
         return sum(1 for term in terms if term in text)
-    # ── Phase 1A — Hard Filters ────────────────────────────────────────────────
+
+    # ── Phase 1A — Hard Filters ──────────────────────────────────────────────
 
     print('[Phase 1A] Applying hard filters...')
 
@@ -400,30 +489,31 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     }
 
     def apply_hard_filters(cid):
-        f   = feature_cache[cid]
+        f = feature_cache[cid]
         tax = taxonomy_cache[cid]
 
         if is_title_chaser(cid):
             return False, 'title_chaser'
 
-        framework_hits  = count_terms_in_profile(cid, FRAMEWORK_TERMS)
+        framework_hits = count_terms_in_profile(cid, FRAMEWORK_TERMS)
         core_skill_hits = count_terms_in_profile(cid, CORE_SKILL_TERMS)
         production_hits = tax['production_ml']
         if framework_hits >= 3 and core_skill_hits <= 1 and production_hits == 0:
             return False, 'framework_enthusiast'
 
-        if f['is_consulting_only']:
+        # ── PATCHED: live-computed flag instead of stale feature_cache value ──
+        if consulting_flag_live.get(cid, False):
             return False, 'consulting_only'
 
         wrong_domain_hits = tax['wrong_domain']
-        nlp_ir_hits       = tax['embeddings_retrieval'] + tax['ranking_eval']
+        nlp_ir_hits = tax['embeddings_retrieval'] + tax['ranking_eval']
         if wrong_domain_hits >= 1 and nlp_ir_hits == 0:
             return False, 'wrong_domain'
 
         return True, 'passed'
 
     passed_candidates = []
-    filtered_out      = []
+    filtered_out = []
 
     for cid in feature_cache:
         passed, reason = apply_hard_filters(cid)
@@ -439,28 +529,30 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     for k, v in hard_filter_stats.items():
         print(f'  {k}: {v}')
 
-    # ── Phase 1B — Soft Penalties ─────────────────────────────────────────────
+    # ── Phase 1B — Soft Penalties ────────────────────────────────────────────
 
     print('\n[Phase 1B] Computing soft penalties...')
 
     def compute_soft_penalty_multiplier(cid):
-        f    = feature_cache[cid]
-        tax  = taxonomy_cache[cid]
+        f = feature_cache[cid]
+        tax = taxonomy_cache[cid]
         mult = 1.0
 
         open_source_hits = count_terms_in_profile(cid, OPEN_SOURCE_SIGNALS)
         if f['github_score'] == -1 and f['yoe'] >= 5 and open_source_hits == 0:
-            mult *= 0.60
+            mult *= 0.30
+        if f['github_score'] < 40 and f['yoe'] >= 5:
+            mult *= 0.30
 
         research_text_hits = count_terms_in_profile(cid, RESEARCH_SIGNALS)
         if research_text_hits >= 2 and tax['production_ml'] == 0:
-            mult *= 0.55
+            mult *= 0.40
 
         current_title = f['title'].lower()
         is_architect_title = any(t in current_title for t in ARCHITECT_TITLES)
         if is_architect_title and f['yoe'] >= 5:
             if not has_coding_signals_in_recent_roles(cid):
-                mult *= 0.65
+                mult *= 0.50
 
         return round(mult, 4)
 
@@ -476,15 +568,15 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     # ============================================================
 
     WEIGHTS = {
-        'w1': 0.40,  # career description score (RRF)
-        'w2': 0.25,  # title alignment
+        'w1': 0.20,  # career description score (RRF)
+        'w2': 0.35,  # title alignment
         'w3': 0.10,  # experience (YOE)
         'w4': 0.20,  # skill match
-        'w5': 0.05,  # python signal
+        'w5': 0.15,  # python signal
     }
 
-    TOP_K  = min(5000, len(passed_candidates))
-    RRF_K  = 60
+    TOP_K = min(5000, len(passed_candidates))
+    RRF_K = 60
     CHUNK_SIZE = 3
 
     SKILL_TAXONOMY = {
@@ -598,25 +690,32 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             'nlp engineer', 'search engineer', 'ranking engineer',
             'retrieval engineer', 'recommendation engineer',
             'research engineer', 'applied scientist', 'machine learning scientist',
-            'ai researcher', 'applied ml', 'applied machine learning',
+            'applied ml', 'applied machine learning',
             'senior ml', 'staff ml', 'principal ml', 'lead ml',
-            'senior ai', 'staff ai', 'principal ai',
-            'senior nlp', 'nlp scientist', 'search scientist',
+            'senior ai', 'staff ai', 'principal ai', 'senior ai engineer',
+            'senior nlp engineer', 'nlp scientist', 'search engineer', 'nlp engineer',
             'ir engineer', 'information retrieval', 'relevance engineer',
-            'recsys engineer', 'ranking scientist',
+            'recsys engineer', 'ranking scientist', 'deep learning engineer', 'ai specialist',
+            'applied ml engineer', 'junior ml engineer', 'lead ai engineer', 'recommendation systems engineer',
+            'senior ml engineer', 'senior machine learning engineer', 'senior software engineer(ml)', 'staff machine learning engineer',
         ]},
-        2: {'multiplier': 0.80, 'keywords': [
+        2: {'multiplier': 0.70, 'keywords': [
             'data scientist', 'computer vision engineer', 'cv engineer',
             'speech engineer', 'conversational ai', 'mlops engineer',
             'ml platform', 'ai product engineer', 'llm engineer',
             'nlp researcher', 'ir researcher', 'ml infrastructure',
-            'deep learning engineer', 'deep learning researcher',
+            'deep learning researcher', 'ai research engineer',
+            'ai researcher', 'analytics engineer', 'data engineer', 'software engineer', 'qa engineer',
+            'senior applied scientis', 'senior data engineer', 'senior data scientist', 'senior software engineer',
         ]},
-        3: {'multiplier': 0.50, 'keywords': [
-            'data engineer', 'analytics engineer', 'backend engineer',
-            'full stack', 'fullstack', 'software engineer', 'platform engineer',
+        3: {'multiplier': 0.20, 'keywords': [
+            'graphic designer', 'analytics engineer', 'backend engineer',
+            'full stack', 'fullstack developer', 'platform engineer',
             'cloud engineer', 'devops engineer', 'data analyst', 'bi engineer',
-            'sde', 'software developer', 'python developer',
+            'sde', 'software developer', 'python developer', 'business analyst', 'civil engineer',
+            'content writer', 'customer support', 'frontend engineer', 'hr manager',
+            'java developer', 'marketing manager', 'mechanical engineer', 'mobile developer',
+            'operations manager', 'project manager', 'sales executive', '.net developer',
         ]},
     }
 
@@ -656,7 +755,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         return {1: 1.00, 2: 0.80, 3: 0.30, 4: 0.00}.get(tier, 0.0)
 
     def get_title_tier_mult(tier):
-        return {1: 1.00, 2: 0.80, 3: 0.50, 4: 0.30}.get(tier, 0.30)
+        return {1: 1.00, 2: 0.70, 3: 0.30, 4: 0.30}.get(tier, 0.30)
 
     def get_best_description(career_history):
         if not career_history:
@@ -683,12 +782,18 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         return get_title_tier_mult(best_tier)
 
     def get_experience_score(yoe):
-        if yoe >= 12: return 0.65
-        elif yoe >= 9: return 0.85
-        elif yoe >= 5: return 1.00
-        elif yoe >= 4: return 0.80
-        elif yoe >= 3: return 0.55
-        else:          return 0.20
+        if yoe >= 12:
+            return 0.65
+        elif yoe >= 9:
+            return 0.95
+        elif yoe >= 5:
+            return 1.00
+        elif yoe >= 4:
+            return 0.80
+        elif yoe >= 3:
+            return 0.55
+        else:
+            return 0.20
 
     def get_skill_match_score(skills):
         skill_text = ' '.join(normalize_text(s.get('name', '')) for s in skills)
@@ -705,7 +810,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             return 1.0
         for role in career_history:
             if 'python' in normalize_text(role.get('description', '') or ''):
-                return 0.6
+                return 0.8
         return 0.0
 
     def get_behavioral_multiplier_t1(signals):
@@ -713,19 +818,30 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         otw_mult = 1.05 if otw else 0.85
 
         rr = signals.get('recruiter_response_rate', 0.0) or 0.0
-        if rr >= 0.80:   response_mult = 1.08
-        elif rr >= 0.60: response_mult = 1.03
-        elif rr >= 0.40: response_mult = 1.00
-        elif rr >= 0.20: response_mult = 0.80
-        else:            response_mult = 0.50
+        if rr >= 0.80:
+            response_mult = 1.08
+        elif rr >= 0.60:
+            response_mult = 1.00
+        elif rr >= 0.40:
+            response_mult = 0.80
+        elif rr >= 0.20:
+            response_mult = 0.75
+        else:
+            response_mult = 0.20
 
         notice = signals.get('notice_period_days', 60) or 60
-        if notice <= 15:   notice_mult = 1.08
-        elif notice <= 30: notice_mult = 1.05
-        elif notice <= 45: notice_mult = 1.00
-        elif notice <= 60: notice_mult = 0.95
-        elif notice <= 90: notice_mult = 0.92
-        else:              notice_mult = 0.88
+        if notice <= 15:
+            notice_mult = 1.08
+        elif notice <= 30:
+            notice_mult = 1.00
+        elif notice <= 45:
+            notice_mult = 0.95
+        elif notice <= 60:
+            notice_mult = 0.90
+        elif notice <= 90:
+            notice_mult = 0.85
+        else:
+            notice_mult = 0.75
 
         return min(otw_mult * response_mult * notice_mult, 1.0)
 
@@ -792,18 +908,18 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             return np.zeros_like(arr)
         return (arr - mn) / (mx - mn)
 
-    bm25_norm  = minmax(bm25_raw)
+    bm25_norm = minmax(bm25_raw)
     sbert_norm = minmax(sbert_raw)
-    bm25_ranks  = np.argsort(np.argsort(-bm25_norm)) + 1
+    bm25_ranks = np.argsort(np.argsort(-bm25_norm)) + 1
     sbert_ranks = np.argsort(np.argsort(-sbert_norm)) + 1
-    rrf_scores  = (1.0 / (RRF_K + bm25_ranks)) + (1.0 / (RRF_K + sbert_ranks))
-    rrf_norm    = minmax(rrf_scores)
-    tier_mults_arr         = np.array(tier_mults_list)
+    rrf_scores = (1.0 / (RRF_K + bm25_ranks)) + (1.0 / (RRF_K + sbert_ranks))
+    rrf_norm = minmax(rrf_scores)
+    tier_mults_arr = np.array(tier_mults_list)
     career_desc_scores_arr = minmax(rrf_norm * tier_mults_arr)
-    career_desc_scores     = {cid: float(career_desc_scores_arr[i]) for i, cid in enumerate(cids_list)}
+    career_desc_scores = {cid: float(career_desc_scores_arr[i]) for i, cid in enumerate(cids_list)}
 
     # ── Per-candidate T1 feature scoring ─────────────────────────────────────
-    cand_map  = {c['candidate_id']: c for c in candidates}
+    cand_map = {c['candidate_id']: c for c in candidates}
     t1_scores = {}
 
     for cid in passed_cids:
@@ -811,8 +927,8 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         if not c:
             continue
         profile = c.get('profile', {})
-        career  = c.get('career_history', [])
-        skills  = c.get('skills', [])
+        career = c.get('career_history', [])
+        skills = c.get('skills', [])
         signals = c.get('redrob_signals', {})
 
         f1 = career_desc_scores.get(cid, 0.0)
@@ -826,13 +942,13 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             WEIGHTS['w4'] * f4 + WEIGHTS['w5'] * f5,
             1.0
         )
-        b_mult    = get_behavioral_multiplier_t1(signals)
+        b_mult = get_behavioral_multiplier_t1(signals)
         s_penalty = soft_penalty_multipliers.get(cid, 1.0)
         t1_scores[cid] = min(raw * b_mult * s_penalty, 1.0)
 
     print(f'  T1 scores computed: {len(t1_scores)}')
 
-    # ── Phase 2B — Top 5000 via min heap ────────────────────────────────────
+    # ── Phase 2B — Top 5000 via min heap ─────────────────────────────────────
     print('\nSelecting top 5000 via min heap...')
     heap = []
     for cid, score in t1_scores.items():
@@ -863,14 +979,14 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         intervals = []
         for role in career_history:
             start = role.get('start_date')
-            dur   = role.get('duration_months', 0) or 0
+            dur = role.get('duration_months', 0) or 0
             if start and dur:
                 try:
                     parts = start.split('-')
                     yr, mo = int(parts[0]), int(parts[1])
                     start_f = yr + mo / 12.0
                     intervals.append((start_f, start_f + dur / 12.0))
-                except:
+                except Exception:
                     continue
         if not intervals:
             return sum_duration_years, sum_duration_years
@@ -911,11 +1027,11 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         return False, 1.0, ''
 
     def check_candidate(candidate):
-        cid     = candidate['candidate_id']
-        result  = HoneypotResult(cid=cid)
+        cid = candidate['candidate_id']
+        result = HoneypotResult(cid=cid)
         profile = candidate.get('profile', {})
-        skills  = candidate.get('skills', [])
-        career  = candidate.get('career_history', [])
+        skills = candidate.get('skills', [])
+        career = candidate.get('career_history', [])
         claimed_yoe = profile.get('years_of_experience', 0) or 0
 
         flagged, reason = check_expert_zero_months(skills)
@@ -958,19 +1074,20 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     # PHASE 3 — T2 SCORING (5000 → Top 200)
     # ============================================================
 
-    print('\n' + '='*60)
+    print('\n' + '=' * 60)
     print('PHASE 3 — T2 Scoring (5000 → 200)')
-    print('='*60)
+    print('=' * 60)
 
-    TOP_K_T2 = min(200, len(clean_candidates))   # adaptive for small sandbox samples
+    TOP_K_T2 = min(200, len(clean_candidates))  # adaptive for small sandbox samples
 
     T2_WEIGHTS = {
-        'f1': 0.20,   # SBERT full profile
-        'f2': 0.15,   # Production depth
-        'f3': 0.23,   # Retrieval specialization
-        'f4': 0.18,   # Skill match
-        'f5': 0.08,   # Experience
-        'f6': 0.16,   # Evaluation mindset
+        'f1': 0.21,   # SBERT full profile
+        'f2': 0.12,   # Production depth
+        'f3': 0.16,   # Retrieval specialization
+        'f4': 0.17,   # Skill match
+        'f5': 0.10,   # Experience
+        'f6': 0.14,   # Evaluation mindset
+        'f7': 0.10,   # Python presence
     }
 
     BEH_WEIGHTS_T2 = {
@@ -983,7 +1100,10 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         'deployed', 'production', 'serving', 'real users', 'scale',
         'latency', 'throughput', 'a/b', 'online', 'inference',
         'pipeline', 'index refresh', 'embedding drift', 'retrieval quality',
-        'shipped', 'launched', 'end-to-end', 'built'
+        'shipped', 'launched', 'end-to-end', 'built',
+        'rollout', 'deployment', 'model-serving', 'model serving',
+        'model monitoring', 'data drift', 'observability', 'p95',
+        'low latency', 'on-call', 'dashboards', 'operational', 'rollback'
     }
     RESEARCH_TERMS = {
         'arxiv', 'research lab', 'academic', 'research internship',
@@ -993,12 +1113,19 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         'embeddings', 'retrieval', 'ranking', 'semantic search',
         'hybrid search', 'dense retrieval', 'vector search', 'bm25',
         'faiss', 'reranking', 'recommendation system', 'search relevance',
-        'index', 'query expansion'
+        'index', 'query expansion', 'ranker', 'recruiter', 'rag', 'nearest-neighbor',
+        'nearest neighbor', 'sparse and dense',
+        'keyword-based search', 'embedding-based search', 'candidate sourcing',
+        'learning-to-rank', 'collaborative filtering', 'item-item similarity',
+        'cold start', 'matching layer', 'pinecone'
     }
     RETRIEVAL_DEPTH_TERMS = {
         'embedding drift', 'index refresh', 'retrieval quality', 'ndcg',
         'mrr', 'recall@k', 'precision@k', 'relevance feedback',
-        'hard negatives', 'contrastive learning', 'bi-encoder', 'cross-encoder'
+        'hard negatives', 'contrastive learning', 'bi-encoder', 'cross-encoder',
+        'relevance judgments', 'offline-online correlation',
+        'online/offline metric correlation', 'ranking calibration',
+        'index versioning', 'embedding versioning', 'click-through data'
     }
     MUST_HAVE_SKILLS = {
         'sentence-transformers', 'bge', 'e5', 'sbert', 'openai embeddings',
@@ -1015,37 +1142,63 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     EVAL_OFFLINE_TERMS = {
         'ndcg', 'mrr', 'map', 'precision@k', 'recall@k', 'offline evaluation',
         'benchmark', 'eval framework', 'relevance judgment', 'ground truth',
-        'human evaluation', 'annotation', 'labeling pipeline'
+        'human evaluation', 'annotation', 'labeling pipeline', 'held-out eval set',
+        'held out eval set', 'relevance labeling',
+        'relevance labeling pipeline', 'human judgments', 'offline metrics',
+        'eval workflow', 'evaluation methodology', 'offline experimentation'
     }
     EVAL_ONLINE_TERMS = {
         'a/b test', 'online evaluation', 'click-through rate', 'ctr',
         'engagement metric', 'conversion', 'feedback loop',
-        'recruiter feedback', 'user study', 'online experiment'
+        'recruiter feedback', 'user study', 'online experiment', 'live engagement',
+        'simulated a/b test', 'a/b testing infrastructure',
+        'online engagement', 'engagement signals', 'retention',
+        'dwell time', 'downstream conversion', 'live a/b test'
     }
     RELEVANT_ML_TITLES = {
         'machine learning', 'ml engineer', 'ai engineer', 'nlp engineer',
-        'research scientist', 'data scientist', 'nlp', 'retrieval',
-        'ranking', 'search', 'recommendations', 'applied scientist'
+        'data scientist', 'nlp', 'retrieval',
+        'ranking', 'search', 'recommendations', 'applied scientist',
+        'machine learning engineer',
+        'search engineer', 'ranking engineer',
+        'retrieval engineer', 'recommendation engineer',
+        'research engineer', 'machine learning scientist',
+        'applied ml', 'applied machine learning',
+        'senior ml', 'staff ml', 'principal ml', 'lead ml',
+        'senior ai', 'staff ai', 'principal ai', 'senior ai engineer',
+        'senior nlp engineer', 'nlp scientist',
+        'ir engineer', 'information retrieval', 'relevance engineer',
+        'recsys engineer', 'ranking scientist', 'deep learning engineer', 'ai specialist',
+        'applied ml engineer', 'junior ml engineer', 'lead ai engineer', 'recommendation systems engineer',
+        'senior ml engineer', 'senior machine learning engineer', 'senior software engineer(ml)', 'staff machine learning engineer',
     }
 
-    def to_lower(text): return (text or '').lower()
-    def any_term_in(text, terms): t = to_lower(text); return any(term in t for term in terms)
+    def to_lower(text):
+        return (text or '').lower()
+
+    def any_term_in(text, terms):
+        t = to_lower(text)
+        return any(term in t for term in terms)
+
     def get_all_desc(career):
         return ' '.join(role.get('description', '') or '' for role in career)
+
     def get_skills_text(skills):
-        if not skills: return ''
+        if not skills:
+            return ''
         return ' '.join(s.get('name', '') if isinstance(s, dict) else str(s) for s in skills)
 
     def compute_f2(career):
         all_desc = get_all_desc(career)
         has_prod = any_term_in(all_desc, PRODUCTION_TERMS)
-        has_res  = any_term_in(all_desc, RESEARCH_TERMS)
-        if has_prod and has_res: return 1.20
+        has_res = any_term_in(all_desc, RESEARCH_TERMS)
+        if has_prod and has_res:
+            return 1.20
         return (0.50 if has_prod else 0.0) + (0.50 if not has_res else 0.0)
 
     def compute_f3(career, skills):
         all_desc = get_all_desc(career)
-        full     = all_desc + ' ' + get_skills_text(skills)
+        full = all_desc + ' ' + get_skills_text(skills)
         return (0.60 if any_term_in(all_desc, RETRIEVAL_DESC_TERMS) else 0.0) + \
                (0.40 if any_term_in(full, RETRIEVAL_DEPTH_TERMS) else 0.0)
 
@@ -1053,41 +1206,58 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         full = to_lower(get_all_desc(career) + ' ' + get_skills_text(skills))
         must_hits = sum(1 for t in MUST_HAVE_SKILLS if t in full)
         nice_hits = sum(1 for t in NICE_TO_HAVE_SKILLS if t in full)
-        if must_hits > 3:    base = 1.0
-        elif must_hits == 3: base = 0.80
-        elif must_hits == 2: base = 0.60 + nice_hits * 0.08
-        elif must_hits == 1: base = 0.40 + nice_hits * 0.08
-        else:                 base = nice_hits * 0.08
+        if must_hits > 3:
+            base = 1.0
+        elif must_hits == 3:
+            base = 0.80
+        elif must_hits == 2:
+            base = 0.60 + nice_hits * 0.08
+        elif must_hits == 1:
+            base = 0.40 + nice_hits * 0.08
+        else:
+            base = nice_hits * 0.08
         return min(base, 1.0)
 
     def get_relevant_yoe(career):
         rel = 0.0
         for role in career:
             title = to_lower(role.get('title', '') or '')
-            desc  = to_lower(role.get('description', '') or '')
+            desc = to_lower(role.get('description', '') or '')
             if any(t in title + ' ' + desc for t in RELEVANT_ML_TITLES):
                 start = role.get('start_date') or role.get('start_year')
-                end   = role.get('end_date') or role.get('end_year')
+                end = role.get('end_date') or role.get('end_year')
                 try:
                     s = int(str(start)[:4]) if start else None
                     e = int(str(end)[:4]) if end else 2026
-                    if s: rel += max(0, e - s)
-                except: rel += 1.0
+                    if s:
+                        rel += max(0, e - s)
+                except Exception:
+                    rel += 1.0
         return rel
 
     def compute_f5(profile, career):
         yoe = float(profile.get('years_of_experience') or 0)
-        if 5 <= yoe <= 9:   sa = 0.50
-        elif yoe > 9:       sa = 0.40
-        elif 3 <= yoe < 5:  sa = 0.35
-        else:               sa = 0.20
+        if 5 <= yoe <= 9:
+            sa = 0.50
+        elif yoe > 9:
+            sa = 0.40
+        elif 3 <= yoe < 5:
+            sa = 0.35
+        else:
+            sa = 0.20
         rel = get_relevant_yoe(career)
-        if rel > 4:         sb = 0.50
-        elif rel == 4:      sb = 0.40
-        elif rel == 3:      sb = 0.35
-        elif rel == 2:      sb = 0.30
-        elif 1 <= rel < 2:  sb = 0.20
-        else:               sb = 0.05
+        if rel > 4:
+            sb = 0.50
+        elif rel == 4:
+            sb = 0.40
+        elif rel == 3:
+            sb = 0.35
+        elif rel == 2:
+            sb = 0.30
+        elif 1 <= rel < 2:
+            sb = 0.20
+        else:
+            sb = 0.05
         return sa + sb
 
     def compute_f6(career):
@@ -1095,61 +1265,90 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         return (0.50 if any_term_in(all_desc, EVAL_OFFLINE_TERMS) else 0.0) + \
                (0.50 if any_term_in(all_desc, EVAL_ONLINE_TERMS) else 0.0)
 
+    def compute_f7(career, skills):
+        full = to_lower(get_all_desc(career) + ' ' + get_skills_text(skills))
+        if 'python' in full:
+            return 1.0
+        return 0.0
+
     def get_behavioral_multiplier_t2(signals):
         otw = signals.get('open_to_work_flag', False)
-        s1  = 1.05 if otw else 0.85
+        s1 = 1.05 if otw else 0.85
 
         rr = float(signals.get('recruiter_response_rate') or 0.0)
-        if rr >= 0.80:   s2 = 1.08
-        elif rr >= 0.60: s2 = 1.03
-        elif rr >= 0.40: s2 = 0.90
-        elif rr >= 0.20: s2 = 0.70
-        else:            s2 = 0.50
+        if rr >= 0.80:
+            s2 = 1.08
+        elif rr >= 0.60:
+            s2 = 1.00
+        elif rr >= 0.40:
+            s2 = 0.80
+        elif rr >= 0.20:
+            s2 = 0.70
+        else:
+            s2 = 0.20
 
         notice = int(signals.get('notice_period_days') or 60)
-        if notice <= 15:   s3 = 1.08
-        elif notice <= 30: s3 = 1.05
-        elif notice <= 45: s3 = 0.95
-        elif notice <= 60: s3 = 0.87
-        elif notice <= 90: s3 = 0.80
-        else:              s3 = 0.73
+        if notice <= 15:
+            s3 = 1.08
+        elif notice <= 30:
+            s3 = 1.00
+        elif notice <= 45:
+            s3 = 0.95
+        elif notice <= 60:
+            s3 = 0.85
+        elif notice <= 90:
+            s3 = 0.80
+        else:
+            s3 = 0.70
 
         work_mode = to_lower(signals.get('preferred_work_mode') or '')
-        if 'onsite' in work_mode or 'local' in work_mode or 'office' in work_mode: s4 = 1.10
-        elif 'hybrid' in work_mode:  s4 = 1.05
-        elif 'remote' in work_mode:  s4 = 0.65
-        else:                        s4 = 1.00
+        if 'onsite' in work_mode or 'local' in work_mode or 'office' in work_mode:
+            s4 = 1.10
+        elif 'hybrid' in work_mode:
+            s4 = 1.05
+        elif 'remote' in work_mode:
+            s4 = 0.50
+        else:
+            s4 = 1.00
 
-        location      = to_lower(signals.get('current_location') or '')
+        location = to_lower(signals.get('current_location') or '')
         willing_reloc = signals.get('willing_to_relocate', None)
-        if any(c in location for c in ['pune', 'noida']):  s5 = 1.05
-        elif willing_reloc is True:  s5 = 1.05
-        elif willing_reloc is False: s5 = 0.60
-        else:                        s5 = 1.00
+        if any(c in location for c in ['pune', 'noida']):
+            s5 = 1.05
+        elif willing_reloc is True:
+            s5 = 1.05
+        elif willing_reloc is False:
+            s5 = 0.60
+        else:
+            s5 = 1.00
 
         job_status = to_lower(signals.get('job_seeking_status') or '')
-        if 'actively' in job_status or 'active' in job_status: s6 = 1.10
-        elif 'open' in job_status:        s6 = 1.00
-        elif 'not looking' in job_status: s6 = 0.85
-        else:                             s6 = 1.00
+        if 'actively' in job_status or 'active' in job_status:
+            s6 = 1.10
+        elif 'open' in job_status:
+            s6 = 1.00
+        elif 'not looking' in job_status:
+            s6 = 0.85
+        else:
+            s6 = 1.00
 
-        raw = (BEH_WEIGHTS_T2['s1']*s1 + BEH_WEIGHTS_T2['s2']*s2 + BEH_WEIGHTS_T2['s3']*s3 +
-               BEH_WEIGHTS_T2['s4']*s4 + BEH_WEIGHTS_T2['s5']*s5 + BEH_WEIGHTS_T2['s6']*s6)
+        raw = (BEH_WEIGHTS_T2['s1'] * s1 + BEH_WEIGHTS_T2['s2'] * s2 + BEH_WEIGHTS_T2['s3'] * s3 +
+               BEH_WEIGHTS_T2['s4'] * s4 + BEH_WEIGHTS_T2['s5'] * s5 + BEH_WEIGHTS_T2['s6'] * s6)
         return float(np.clip(raw, BEH_FLOOR, BEH_CAP))
 
-    # ── Load precomputed embeddings for f1 ───────────────────────────────────
+    # ── Load precomputed embeddings for f1 ────────────────────────────────────
     print('Loading precomputed embeddings for T2 f1...')
-    rich_path  = f'{PRECOMPUTED}/embeddings_rich.npy'
-    cids_path  = f'{PRECOMPUTED}/embed_cids_rich.npy'
+    rich_path = f'{PRECOMPUTED}/embeddings_rich.npy'
+    cids_path = f'{PRECOMPUTED}/embed_cids_rich.npy'
     if not os.path.exists(rich_path):
         rich_path = f'{PRECOMPUTED}/embeddings.npy'
         cids_path = f'{PRECOMPUTED}/embed_cids.npy'
-    all_embs     = np.load(rich_path).astype('float32')
+    all_embs = np.load(rich_path).astype('float32')
     all_emb_cids = np.load(cids_path, allow_pickle=True)
-    embed_index  = {str(cid): i for i, cid in enumerate(all_emb_cids)}
-    jd_vec_norm  = jd_vector / (np.linalg.norm(jd_vector) + 1e-9)
+    embed_index = {str(cid): i for i, cid in enumerate(all_emb_cids)}
+    jd_vec_norm = jd_vector / (np.linalg.norm(jd_vector) + 1e-9)
 
-    # ── Score all 5000 candidates with T2 ───────────────────────────────────
+    # ── Score all 5000 candidates with T2 ─────────────────────────────────────
     print(f'Computing T2 scores for {len(clean_candidates)} candidates...')
     t2_scores = {}
 
@@ -1162,15 +1361,15 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             continue
 
         profile = c.get('profile', {})
-        career  = c.get('career_history', [])
-        skills  = c.get('skills', [])
+        career = c.get('career_history', [])
+        skills = c.get('skills', [])
         signals = c.get('redrob_signals', {})
 
         ei = embed_index.get(str(cid))
         if ei is not None:
             emb = all_embs[ei]
             emb = emb / (np.linalg.norm(emb) + 1e-9)
-            f1  = float(np.dot(emb, jd_vec_norm))
+            f1 = float(np.dot(emb, jd_vec_norm))
         else:
             f1 = 0.0
 
@@ -1179,16 +1378,18 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         f4 = compute_f4(career, skills)
         f5 = compute_f5(profile, career)
         f6 = compute_f6(career)
+        f7 = compute_f7(career, skills)
+
         beh = get_behavioral_multiplier_t2(signals)
 
-        t2 = (T2_WEIGHTS['f1']*f1 + T2_WEIGHTS['f2']*f2 + T2_WEIGHTS['f3']*f3 +
-              T2_WEIGHTS['f4']*f4 + T2_WEIGHTS['f5']*f5 + T2_WEIGHTS['f6']*f6) * beh
+        t2 = (T2_WEIGHTS['f1'] * f1 + T2_WEIGHTS['f2'] * f2 + T2_WEIGHTS['f3'] * f3 +
+              T2_WEIGHTS['f4'] * f4 + T2_WEIGHTS['f5'] * f5 + T2_WEIGHTS['f6'] * f6 + T2_WEIGHTS['f7'] * f7) * beh
 
         t2_scores[cid] = round(t2, 6)
 
     print(f'  T2 scores computed: {len(t2_scores)}')
 
-    # ── Top 200 via min heap ─────────────────────────────────────────────────
+    # ── Top 200 via min heap ──────────────────────────────────────────────────
     print(f'\nSelecting top {TOP_K_T2} via min heap...')
     heap = []
     for cid, score in t2_scores.items():
@@ -1199,15 +1400,15 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
     top_200 = sorted(heap, key=lambda x: -x[0])
     print(f'  Top {TOP_K_T2} selected. Score range: {top_200[-1][0]:.4f} – {top_200[0][0]:.4f}')
-    t2_lookup = {cid: {'t2_score': score, 't2_rank': rank+1} for rank, (score, cid) in enumerate(top_200)}
+    t2_lookup = {cid: {'t2_score': score, 't2_rank': rank + 1} for rank, (score, cid) in enumerate(top_200)}
 
     # ============================================================
     # PHASE 4 — T3 CROSS-ENCODER RE-RANKING (200 → 100)
     # ============================================================
 
-    print('\n' + '='*60)
+    print('\n' + '=' * 60)
     print('PHASE 4 — T3 Cross-Encoder Re-ranking (200 → 100)')
-    print('='*60)
+    print('=' * 60)
 
     TOP_K_T3 = min(100, len(top_200))
 
@@ -1249,7 +1450,6 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     for rank, (t3, i, cid) in enumerate(top_100[:10], start=1):
         print(f'  {rank:<5} {cid:<18} {t3:<10.4f} {cross_norm[i]:<13.4f} {t2_values[i]:<10.4f} {t2_lookup[cid]["t2_rank"]}')
 
-
     # ============================================================
     # PHASE 4 — REASONING GENERATOR (fact-grounded, local, templated)
     # No LLM calls. Pulls only facts that exist in the candidate's
@@ -1257,11 +1457,9 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     # concern surfacing vary by rank tier and by what's actually true.
     # ============================================================
 
-    import random
-
     random.seed(42)  # deterministic phrasing variation across runs
 
-    # ── Tier definitions (by rank, 1-indexed) ──────────────────────────────────
+    # ── Tier definitions (by rank, 1-indexed) ─────────────────────────────────
     def get_tier(rank):
         if rank <= 10:
             return 'top'
@@ -1270,8 +1468,8 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         else:
             return 'lower'
 
-    # ── Sentence-opener banks (rotated by hashing candidate_id, not random per-row,
-    #    so re-runs are reproducible) ──────────────────────────────────────────
+    # ── Sentence-opener banks (rotated by hashing candidate_id, not random per-run,
+    #    so re-runs are reproducible) ─────────────────────────────────────────
     OPENERS_TOP = [
         "{title} with {yoe} years of experience",
         "{yoe}-year {title}",
@@ -1326,13 +1524,11 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         "brings related ML experience without deep retrieval/ranking specialization",
     ]
 
-
     def pick(seq, seed_key):
         """Deterministic pseudo-random pick based on candidate_id so phrasing
         varies across the 100 rows without being random on every script run."""
         idx = sum(ord(c) for c in seed_key) % len(seq)
         return seq[idx]
-
 
     def format_skills(skill_names, limit=3):
         if not skill_names:
@@ -1344,7 +1540,6 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             return cleaned[0]
         return ', '.join(cleaned[:-1]) + ' and ' + cleaned[-1]
 
-
     def get_best_title(career_history):
         if not career_history:
             return 'a professional'
@@ -1354,7 +1549,6 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             reverse=True
         )
         return sorted_roles[0].get('title', 'a professional') or 'a professional'
-
 
     def get_top_skill_names(skills, taxonomy_terms, limit=3):
         """Pull only skill names that actually appear in the candidate's skills
@@ -1372,13 +1566,11 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
                 matched.append(name)
         return matched[:limit]
 
-
     # Flattened taxonomy for skill-name matching in reasoning text
     RELEVANT_TERMS_FLAT = set()
     for _cat, _terms in SKILL_TAXONOMY.items():
         RELEVANT_TERMS_FLAT.update(t.lower() for t in _terms)
     RELEVANT_TERMS_FLAT.update(['python', 'pytorch', 'tensorflow'])
-
 
     def build_concerns(cid, candidate, signals, profile, yoe, skills_text):
         """Collect honest, fact-grounded concerns. Only includes a concern if
@@ -1414,24 +1606,23 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
 
         return concerns
 
-
     def generate_reasoning(rank, cid, candidate, t_score):
-        tier    = get_tier(rank)
+        tier = get_tier(rank)
         profile = candidate.get('profile', {})
-        career  = candidate.get('career_history', [])
-        skills  = candidate.get('skills', [])
+        career = candidate.get('career_history', [])
+        skills = candidate.get('skills', [])
         signals = candidate.get('redrob_signals', {})
 
-        yoe   = profile.get('years_of_experience', 0) or 0
+        yoe = profile.get('years_of_experience', 0) or 0
         title = get_best_title(career)
 
         matched_skills = get_top_skill_names(skills, RELEVANT_TERMS_FLAT, limit=3)
-        skills_text    = format_skills(matched_skills)
+        skills_text = format_skills(matched_skills)
         full_skills_text = ' '.join((s.get('name', '') or '') for s in skills)
 
         # ── Opener ──────────────────────────────────────────────────────────
         opener_bank = {'top': OPENERS_TOP, 'mid': OPENERS_MID, 'lower': OPENERS_LOWER}[tier]
-        opener_tpl  = pick(opener_bank, cid)
+        opener_tpl = pick(opener_bank, cid)
         opener = opener_tpl.format(title=title, yoe=int(yoe) if yoe else 'unspecified')
 
         # ── Skill clause ────────────────────────────────────────────────────
@@ -1440,7 +1631,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             connector = pick(SKILL_CONNECTORS, cid + '_sk')
             skill_clause = ' ' + connector.format(skills=skills_text)
 
-        # ── Production signal (only if actually present in description text) ─
+        # ── Production signal (only if actually present in description text) ──
         all_desc = ' '.join((r.get('description', '') or '') for r in career).lower()
         production_clause = ''
         if any(p.split()[0] in all_desc for p in ['deployed', 'production', 'shipped', 'scale', 'serving']):
@@ -1462,12 +1653,11 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         else:
             concern_clause = '.'
 
-        # ── Assemble: 1-2 sentences ─────────────────────────────────────────
+        # ── Assemble: 1-2 sentences ──────────────────────────────────────────
         sentence_1 = f"{opener}{skill_clause}{production_clause}, {jd_clause}{concern_clause}"
         sentence_1 = sentence_1[0].upper() + sentence_1[1:]
 
         return sentence_1
-
 
     # ============================================================
     # Run Phase 4 over the final ranked list
@@ -1475,9 +1665,9 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     #  list of (t3_score, idx_in_ordered_ids, cid) tuples, already sorted desc)
     # ============================================================
 
-    print('\n' + '='*60)
+    print('\n' + '=' * 60)
     print('PHASE 4 — Reasoning Generator')
-    print('='*60)
+    print('=' * 60)
 
     reasoning_results = []
     for rank, (t3, i, cid) in enumerate(top_100, start=1):
@@ -1492,11 +1682,9 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     print('\n  Sample (rank 1, 25, 50, 75, 100):')
     for r in [1, 25, 50, 75, 100]:
         if r <= len(reasoning_results):
-            rank, cid, t3, text = reasoning_results[r-1]
+            rank, cid, t3, text = reasoning_results[r - 1]
             print(f'\n  [{rank}] {cid} (score={t3:.4f})')
             print(f'    {text}')
-
-
 
     # ============================================================
     # PHASE 5 — SELF-VALIDATION + FINAL CSV EXPORT
@@ -1504,16 +1692,14 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     # before writing the file the validator will actually check.
     # ============================================================
 
-    import csv
-
-    print('\n' + '='*60)
+    print('\n' + '=' * 60)
     print('PHASE 5 — Self-Validation + Final Export')
-    print('='*60)
+    print('=' * 60)
 
-    TEAM_SUBMISSION_ID = team_id
+    TEAM_SUBMISSION_ID = 'team_T1'
     FINAL_CSV = output_csv_path
 
-    # ── Build final rows from Phase 4 results ──────────────────────────────────
+    # ── Build final rows from Phase 4 results ─────────────────────────────────
     # reasoning_results: list of (rank, cid, t3_score, reasoning_text)
     final_rows = []
     for rank, cid, t3, reasoning in reasoning_results:
@@ -1551,7 +1737,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     ranks = sorted(r['rank'] for r in final_rows)
     if ranks != list(range(1, effective_top_n + 1)):
         missing = set(range(1, effective_top_n + 1)) - set(ranks)
-        dupes   = [r for r in ranks if ranks.count(r) > 1]
+        dupes = [r for r in ranks if ranks.count(r) > 1]
         errors.append(f'Ranks not exactly 1-{effective_top_n} once each. Missing: {missing}, Duplicated: {set(dupes)}')
 
     # 3. No duplicate candidate_ids
@@ -1608,12 +1794,14 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
     else:
         print(f'  Honeypot check passed: {honeypot_rate:.1%} (limit 10%)')
 
-    # ── Report ───────────────────────────────────────────────────────────────
+    # ── Report ─────────────────────────────────────────────────────────────
     print(f'\n  Rows: {len(final_rows)}')
     print(f'  Unique ranks: {len(set(ranks))}')
     print(f'  Unique candidate_ids: {len(set(cids_seen))}')
     print(f'  Unique scores: {len(unique_scores)}')
-    print(f'  Score range: {rows_by_rank[-1]["score"]:.4f} (rank 100) -> {rows_by_rank[0]["score"]:.4f} (rank 1)')
+    if rows_by_rank:
+        print(f'  Score range: {rows_by_rank[-1]["score"]:.4f} (rank {rows_by_rank[-1]["rank"]}) -> '
+              f'{rows_by_rank[0]["score"]:.4f} (rank {rows_by_rank[0]["rank"]})')
 
     if errors:
         print(f'\n  ✗ {len(errors)} VALIDATION ERROR(S) — DO NOT SUBMIT:')
@@ -1627,7 +1815,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
         for w in warnings:
             print(f'    - {w}')
 
-    # ── Write CSV only if no hard errors ────────────────────────────────────
+    # ── Write CSV only if no hard errors ──────────────────────────────────────
     if errors:
         print('\n  CSV NOT WRITTEN — fix errors above first.')
     else:
@@ -1639,7 +1827,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
                 writer.writerow([r['candidate_id'], r['rank'], r['score'], r['reasoning']])
         print('  ✓ Saved.')
 
-        # ── Post-write sanity re-read (catches encoding/quoting issues) ──────
+        # ── Post-write sanity re-read (catches encoding/quoting issues) ────────
         print('\n  Re-reading file to confirm it parses cleanly...')
         with open(FINAL_CSV, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
@@ -1650,6 +1838,7 @@ def run_ranking(candidates, jd_vector, precomputed_dir, output_csv_path,
             f'Column order mismatch: {list(reread_rows[0].keys())}'
         print('  ✓ File re-reads cleanly with correct columns and row count.')
         print(f'\n  Submission ready: {FINAL_CSV}')
+
     return {
         'rows': rows_by_rank if not errors else [],
         'errors': errors,
