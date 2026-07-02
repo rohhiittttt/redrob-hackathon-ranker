@@ -1,0 +1,51 @@
+team_name: "T1"
+
+primary_contact:
+  name: "ROHIT DAS"
+  email: "rohitdas150.2009@gmail.com"
+  phone: "9608981348"
+
+github_repository_url: "https://github.com/rohhiittttt/redrob-hackathon-ranker.git"
+sandbox_demo_link: "https://huggingface.co/spaces/Rohhiittttt/redrob-ranker-sandbox"
+
+ai_tools_declared:
+  - "ChatGPT"
+  - "Claude"
+
+compute_environment_summary: >
+  Ranking system was developed and tested on Hugging Face Spaces free tier using
+  a CPU-only Python environment. The ranking step is designed to run offline
+  without hosted LLM/API calls and within the hackathon compute constraints.
+
+team_members:
+  - name: "NILESH DAS"
+    email: "nileshdas4115@gmail.com"
+  - name: "BHAWESH KUMAR"
+    email: "btech60034.25@bitmesra.ac.in"
+
+submission:
+  csv_filename: "team_T1.csv"
+  ranking_command: "python rank.py --candidates candidates.jsonl --out submission.csv --precomputed precomputed"
+
+methodology_summary: >
+  Our approach builds an offline, CPU-only candidate ranking pipeline for the
+  Redrob Senior AI Engineer job description. The system combines precomputed
+  semantic similarity, lexical/JD evidence matching, and rule-based scoring
+  focused on the role's core requirements: production retrieval and ranking
+  systems, embeddings, vector or hybrid search infrastructure, ranking
+  evaluation signals such as NDCG/MRR/MAP/A-B testing, Python/code quality,
+  seniority fit, product-engineering shipping mindset, and candidate
+  availability signals. We also apply conservative penalties for profiles that
+  conflict with the JD, including weak production evidence, consulting-only
+  backgrounds, framework-only AI demos, wrong-domain specialization, low
+  availability, and possible honeypot-style inconsistencies. The final output
+  is validated to contain exactly 100 unique candidate IDs, ranks 1-100,
+  monotonically non-increasing scores, and concise fact-grounded reasoning for
+  manual review.
+
+reproducibility_notes: >
+  No hosted LLM APIs, external network calls, or GPU computation are required
+  during the ranking step. Any precomputed artifacts used by the ranker should
+  be included in the repository or generated through documented preprocessing
+  instructions. The README should contain the exact command above so reviewers
+  can reproduce team_T1.csv from the released candidates file.
